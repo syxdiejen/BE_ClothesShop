@@ -1,0 +1,49 @@
+# =========================
+# Build artifacts
+# =========================
+bin/
+obj/
+Debug/
+Release/
+[Bb]uild/
+[Tt]emp/
+
+# =========================
+# User-specific files
+# =========================
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+.vs/
+.vscode/
+
+# =========================
+# Logs / Temporary
+# =========================
+*.log
+*.tlog
+*.tmp
+*.bak
+*.swp
+
+# =========================
+# Environment / Secrets
+# =========================
+appsettings.Development.json
+.env
+*.secret.json
+
+# =========================
+# OS / IDE generated files
+# =========================
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+
+# =========================
+# Publish output
+# =========================
+publish/
+*.publish.xml
