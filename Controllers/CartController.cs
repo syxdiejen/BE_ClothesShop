@@ -1,9 +1,11 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using SalesApi.Data.Models;
 using SalesApi.DTOs;
 using System.ComponentModel.DataAnnotations;
 
+[Authorize]
 [ApiController]
 [Route("api/[controller]")]
 public class CartController : ControllerBase
@@ -37,7 +39,10 @@ public class CartController : ControllerBase
     [HttpPost]
     public async Task<ActionResult<int>> CreateCart(CancellationToken ct)
     {
-        var cart = new Cart();
+        var cart = new Cart{
+            Status = "pending",
+            TotalPrice = 0m  
+        };
         _db.Carts.Add(cart);
         await _db.SaveChangesAsync(ct);
         return Ok(cart.CartID);
@@ -74,7 +79,11 @@ public class CartController : ControllerBase
             var hasCart = await _db.Carts.AnyAsync(c => c.CartID == existingId, ct);
             if (!hasCart)
             {
-                var newCart = new Cart();
+                var newCart = new Cart
+                {
+                    Status = "pending",
+                    TotalPrice = 0m
+                };
                 _db.Carts.Add(newCart);
                 await _db.SaveChangesAsync(ct);
                 cartId = newCart.CartID;
@@ -83,7 +92,11 @@ public class CartController : ControllerBase
         }
         else
         {
-            var newCart = new Cart();
+            var newCart = new Cart
+            {
+                Status = "pending",
+                TotalPrice = 0m
+            };
             _db.Carts.Add(newCart);
             await _db.SaveChangesAsync(ct);
             cartId = newCart.CartID;

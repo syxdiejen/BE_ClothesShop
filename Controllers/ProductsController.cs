@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using SalesApi.Data.Models;
@@ -135,6 +136,7 @@ public class ProductsController : ControllerBase
     }
 
     // POST /api/products
+    [Authorize(Policy = "RequireAdmin")]
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] ProductCreateDto req)
     {
@@ -166,6 +168,7 @@ public class ProductsController : ControllerBase
     }
 
     // PUT /api/products/{id}
+    [Authorize(Policy = "RequireAdmin")]
     [HttpPut("{id:int}")]
     public async Task<IActionResult> Update(int id, [FromBody] ProductUpdateDto req)
     {
@@ -197,6 +200,7 @@ public class ProductsController : ControllerBase
     }
 
     // DELETE /api/products/{id}
+    [Authorize(Policy = "RequireAdmin")]
     [HttpDelete("{id:int}")]
     public async Task<IActionResult> Delete(int id)
     {

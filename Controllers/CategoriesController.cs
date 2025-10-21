@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -36,9 +37,10 @@ public class CategoriesController : ControllerBase
                 CategoryName = c.CategoryName
             })
             .FirstOrDefaultAsync();
-            return category is null ? NotFound() : Ok(category);
+        return category is null ? NotFound() : Ok(category);
     }
 
+    [Authorize(Policy = "RequireAdmin")]
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateCategoryDTO req)
     {
@@ -60,6 +62,7 @@ public class CategoriesController : ControllerBase
             });
     }
 
+    [Authorize(Policy = "RequireAdmin")]
     [HttpPut("{id:int}")]
     public async Task<IActionResult> Update(int id, [FromBody] CategoryDTO req)
     {
@@ -73,6 +76,7 @@ public class CategoriesController : ControllerBase
         return NoContent();
     }
 
+    [Authorize(Policy = "RequireAdmin")]
     [HttpDelete("{id:int}")]
     public async Task<IActionResult> Delete(int id)
     {

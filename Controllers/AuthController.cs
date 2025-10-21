@@ -1,3 +1,6 @@
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using SalesApi.Data.Models;
@@ -7,10 +10,12 @@ using SalesApi.Data.Models;
 public class AuthController : ControllerBase
 {
     private readonly SalesAppDbContext _db;
+    private readonly IJwtTokenService _jwt;
 
-    public AuthController(SalesAppDbContext db)
+    public AuthController(SalesAppDbContext db, IJwtTokenService jwt)
     {
         _db = db;
+        _jwt = jwt;
     }
 
     // ========== SIGN UP (không JWT) ==========
@@ -48,7 +53,7 @@ public class AuthController : ControllerBase
         });
     }
 
-    // ========== LOGIN (không JWT) ==========
+    // ========== LOGIN ==========
     [HttpPost("login")]
     public async Task<ActionResult<AuthResponse>> Login([FromBody] LoginRequest req)
     {
@@ -58,25 +63,37 @@ public class AuthController : ControllerBase
         var ok = BCrypt.Net.BCrypt.Verify(req.Password, user.PasswordHash);
         if (!ok) return Unauthorized("Invalid credentials.");
 
-        return Ok(new AuthResponse
+        var token = _jwt.CreateToken(
+            user.UserID, user.Username, user.Role, user.Email);
+
+        return Ok(new
         {
-            UserId = user.UserID,
-            Username = user.Username,
-            Email = user.Email,
-            Role = user.Role
+            token,
+            user = new AuthResponse
+            {
+                UserId = user.UserID,
+                Username = user.Username,
+                Email = user.Email,
+                Role = user.Role
+            }
         });
     }
 
     // ========== ME (mở, không cần token) ==========
     // Ví dụ gọi: GET /api/auth/me?username=taid
+    [Authorize]
     [HttpGet("me")]
-    public async Task<ActionResult<object>> Me([FromQuery] string username)
+    public async Task<ActionResult<object>> Me()
     {
-        if (string.IsNullOrWhiteSpace(username))
-            return BadRequest("username is required.");
+        var uidStr = User.FindFirstValue("uid")
+           ?? User.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? User.FindFirstValue(JwtRegisteredClaimNames.Sub)
+            ?? User.FindFirstValue(ClaimTypes.Name);
 
-        var user = await _db.Users.AsNoTracking()
-            .FirstOrDefaultAsync(u => u.Username == username);
+        if (!int.TryParse(uidStr, out var uid))
+            return Unauthorized("Invalid token: user id claim is not an integer.");
+            
+        var user = await _db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.UserID == uid);
         if (user is null) return NotFound();
 
         return Ok(new
@@ -86,8 +103,7 @@ public class AuthController : ControllerBase
             user.Email,
             user.PhoneNumber,
             user.Address,
-            user.Role,
-            Note = "Auth removed: open endpoint using ?username="
+            user.Role
         });
     }
 }
