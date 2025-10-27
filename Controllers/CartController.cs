@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using SalesApi.Data.Models;
 using SalesApi.DTOs;
 using System.ComponentModel.DataAnnotations;
+using System.Security.Claims;
 
 [Authorize]
 [ApiController]
@@ -13,164 +14,223 @@ public class CartController : ControllerBase
     private readonly SalesAppDbContext _db;
     public CartController(SalesAppDbContext db) => _db = db;
 
-    private async Task<CartReadDto> BuildCartDtoAsync(int cartId, CancellationToken ct = default)
+    //=========== Helpers ===========
+    private ActionResult<int> _GetUserIdOr401()
     {
-        var items = await _db.CartItems
-            .AsNoTracking()
-            .Where(ci => ci.CartID == cartId)
-            .Join(_db.Products.AsNoTracking(),
-                  ci => ci.ProductID,
-                  p => p.ProductID,
-                  (ci, p) => new CartItemReadDto
-                  {
-                      CartItemID = ci.CartItemID,
-                      ProductID = p.ProductID,
-                      ProductName = p.ProductName,
-                      ImageURL = p.ImageURL,
-                      UnitPrice = ci.Price,
-                      Quantity = ci.Quantity
-                  })
-                  .ToListAsync(ct);
-        // Trả về
-        return new CartReadDto { CartID = cartId, Items = items };
+        var s = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("uid");
+        if (string.IsNullOrEmpty(s)) return Unauthorized("Bạn cần đăng nhập.");
+        if (!int.TryParse(s, out var uid)) return BadRequest("User ID trong token không hợp lệ.");
+        return uid;
     }
 
-    // (Tuỳ chọn) Tạo cart chủ động – nếu FE muốn xin sẵn cartId
-    [HttpPost]
-    public async Task<ActionResult<int>> CreateCart(CancellationToken ct)
+    private async Task<Cart?> _GetPendingCartWithItemsAsync(int userId, CancellationToken ct, bool includeProduct = false)
     {
-        var cart = new Cart{
+        var q = _db.Carts.Where(c => c.UserID == userId && c.Status == "pending").AsQueryable();
+        q = includeProduct
+            ? q.Include(c => c.CartItems).ThenInclude(i => i.Product)
+            : q.Include(c => c.CartItems);
+        return await q.FirstOrDefaultAsync(ct);
+    }
+
+    private async Task<Cart> _GetOrCreatePendingCartAsync(int userId, CancellationToken ct)
+    {
+        var cart = await _db.Carts
+            .Include(c => c.CartItems)
+            .FirstOrDefaultAsync(c => c.UserID == userId && c.Status == "pending", ct);
+
+        if (cart is not null) return cart;
+
+        cart = new Cart
+        {
+            UserID = userId,
             Status = "pending",
-            TotalPrice = 0m  
+            TotalPrice = 0
         };
         _db.Carts.Add(cart);
-        await _db.SaveChangesAsync(ct);
-        return Ok(cart.CartID);
+        await _db.SaveChangesAsync(ct); // cần CartID trước khi thêm CartItem
+        return cart;
     }
 
-    //Lấy giỏ hàng
-    [HttpGet("{cartId:int}")]
-    public async Task<ActionResult<CartReadDto>> GetCart(int cartId, CancellationToken ct)
+    private static void _RecalcTotal(Cart cart)
     {
-        bool exists = await _db.Carts.AsNoTracking()
-            .AnyAsync(c => c.CartID == cartId, ct);
-        if (!exists) return NotFound("Cart not found.");
-
-        var dto = await BuildCartDtoAsync(cartId, ct);
-        return Ok(dto);
+        cart.TotalPrice = cart.CartItems.Sum(i => i.Price * i.Quantity);
     }
 
-    [HttpPost("add-or-create")]
-    public async Task<ActionResult<CartReadDto>> AddOrCreate([FromBody] CartItemCreateDto req, CancellationToken ct)
+    private static CartReadDto _MapToDto(Cart cart)
     {
-        if (!ModelState.IsValid)
-            return ValidationProblem(ModelState);
+        var dto = new CartReadDto
+        {
+            CartID = cart.CartID,
+            Status = cart.CartItems.Count == 0 ? "empty" : cart.Status,
+            Items = cart.CartItems.Select(i => new CartItemReadDto
+            {
+                CartItemID = i.CartItemID,
+                ProductID = i.ProductID ?? 0,
+                ProductName = i.Product?.ProductName ?? "",
+                ImageURL = i.Product?.ImageURL,
+                UnitPrice = i.Price,
+                Quantity = i.Quantity
+            }).ToList()
+        };
+        return dto;
+    }
 
-        //1 Lấy thông tin product
+    private static CartReadDto EmptyDto() => new CartReadDto
+    {
+        CartID = 0,
+        Status = "empty",
+        Items = new()
+    };
+
+    // ========= Endpoints =========
+    // GET /api/cart
+    [HttpGet]
+    public async Task<ActionResult<CartReadDto>> GetMyCart(CancellationToken ct)
+    {
+        var uidOrErr = _GetUserIdOr401();
+        if (uidOrErr.Result is not null) return uidOrErr.Result!;
+        var userId = uidOrErr.Value;
+
+        var cart = await _GetPendingCartWithItemsAsync(userId, ct, includeProduct: true);
+        if (cart is null || cart.CartItems.Count == 0) return Ok(EmptyDto());
+
+        return Ok(_MapToDto(cart));
+    }
+
+    // POST /api/cart/add-item
+    [HttpPost("add-item")]
+    public async Task<ActionResult<CartReadDto>> AddItem([FromBody] CartItemCreateDto dto, CancellationToken ct)
+    {
+        var uidOrErr = _GetUserIdOr401();
+        if (uidOrErr.Result is not null) return uidOrErr.Result!;
+        var userId = uidOrErr.Value;
+
+        if (dto.Quantity <= 0) return BadRequest("Quantity phải >= 1.");
+
         var product = await _db.Products.AsNoTracking()
-            .FirstOrDefaultAsync(p => p.ProductID == req.ProductID, ct);
-        if (product is null)
-            return BadRequest("ProductID không tồn tại.");
+            .FirstOrDefaultAsync(p => p.ProductID == dto.ProductID, ct);
+        if (product is null) return NotFound("Sản phẩm không tồn tại.");
 
-        //2 Lấy hoặc tạo giỏ hàng
-        int cartId;
-        if (req.CartID is int existingId)
-        {
-            var hasCart = await _db.Carts.AnyAsync(c => c.CartID == existingId, ct);
-            if (!hasCart)
-            {
-                var newCart = new Cart
-                {
-                    Status = "pending",
-                    TotalPrice = 0m
-                };
-                _db.Carts.Add(newCart);
-                await _db.SaveChangesAsync(ct);
-                cartId = newCart.CartID;
-            }
-            else cartId = existingId;
-        }
-        else
-        {
-            var newCart = new Cart
-            {
-                Status = "pending",
-                TotalPrice = 0m
-            };
-            _db.Carts.Add(newCart);
-            await _db.SaveChangesAsync(ct);
-            cartId = newCart.CartID;
-        }
+        var cart = await _GetOrCreatePendingCartAsync(userId, ct);
 
-        //3 Kiểm tra sản phẩm đã có trong giỏ chưa
+        // tìm nhanh theo CartID + ProductID (không cần Include Product)
         var item = await _db.CartItems
-            .FirstOrDefaultAsync(ci => ci.CartID == cartId && ci.ProductID == req.ProductID, ct);
+            .FirstOrDefaultAsync(i => i.CartID == cart.CartID && i.ProductID == dto.ProductID, ct);
 
         if (item is null)
         {
-            // Thêm mới
             item = new CartItem
             {
-                CartID = cartId,
-                ProductID = req.ProductID,
-                Quantity = req.Quantity,
-                Price = product.Price
+                CartID = cart.CartID,
+                ProductID = product.ProductID,
+                Quantity = dto.Quantity,
+                Price = product.Price // snapshot giá tại thời điểm thêm
             };
             _db.CartItems.Add(item);
         }
         else
         {
-            // Cập nhật số lượng
-            item.Quantity += req.Quantity;
+            item.Quantity += dto.Quantity;
+            item.Price = product.Price; // cập nhật giá hiện tại nếu muốn
         }
+
+        // reload items tối thiểu để tính total & map DTO (không nhất thiết ThenInclude Product)
+        await _db.Entry(cart).Collection(c => c.CartItems).LoadAsync(ct);
+        _RecalcTotal(cart);
         await _db.SaveChangesAsync(ct);
 
-        //4 Trả về giỏ hàng sau thao tac
-        var dto = await BuildCartDtoAsync(cartId, ct);
-        return Ok(dto);
+        // map có ProductName/Image → load Product cho các item một lượt
+        await _db.Entry(cart).Collection(c => c.CartItems).Query().Include(i => i.Product).LoadAsync(ct);
+        return Ok(_MapToDto(cart));
     }
 
-    // Cập nhật số lượng 1 item
-    // PUT /api/cart/{cartId}/items/{cartItemId}
-    [HttpPut("{cartId:int}/items/{cartItemId:int}")]
-    public async Task<IActionResult> UpdateItemQuantity(
-        int cartId, int cartItemId, [FromBody] CartItemUpdateDto req, CancellationToken ct)
+    // PUT /api/cart/update-item?productId=...
+    [HttpPut("update-item")]
+    public async Task<ActionResult<CartReadDto>> UpdateItem([FromBody] CartItemUpdateDto dto, [FromQuery] int productId, CancellationToken ct)
     {
-        if (!ModelState.IsValid) return ValidationProblem(ModelState);
+        var uidOrErr = _GetUserIdOr401();
+        if (uidOrErr.Result is not null) return uidOrErr.Result!;
+        var userId = uidOrErr.Value;
+
+        var cart = await _GetPendingCartWithItemsAsync(userId, ct, includeProduct: false);
+        if (cart is null) return NotFound("Giỏ hàng không tồn tại.");
 
         var item = await _db.CartItems
-            .FirstOrDefaultAsync(ci => ci.CartItemID == cartItemId && ci.CartID == cartId, ct);
-        if (item is null) return NotFound();
+            .FirstOrDefaultAsync(i => i.CartID == cart.CartID && i.ProductID == productId, ct);
+        if (item is null) return NotFound("Sản phẩm không có trong giỏ hàng.");
 
-        item.Quantity = req.Quantity;
+        if (dto.Quantity <= 0)
+        {
+            _db.CartItems.Remove(item);
+        }
+        else
+        {
+            item.Quantity = dto.Quantity;
+        }
+
+        await _db.Entry(cart).Collection(c => c.CartItems).LoadAsync(ct);
+        if (cart.CartItems.Count == 0)
+        {
+            _db.Carts.Remove(cart);
+            await _db.SaveChangesAsync(ct);
+            return Ok(EmptyDto());
+        }
+
+        _RecalcTotal(cart);
         await _db.SaveChangesAsync(ct);
-        return NoContent();
+
+        // map có Product info
+        await _db.Entry(cart).Collection(c => c.CartItems).Query().Include(i => i.Product).LoadAsync(ct);
+        return Ok(_MapToDto(cart));
     }
 
-    // Xoá 1 item trong giỏ
-    // DELETE /api/cart/{cartId}/items/{cartItemId}
-    [HttpDelete("{cartId:int}/items/{cartItemId:int}")]
-    public async Task<IActionResult> RemoveItem(int cartId, int cartItemId, CancellationToken ct)
+    // DELETE /api/cart/remove-item/{productId}
+    [HttpDelete("remove-item/{productId:int}")]
+    public async Task<ActionResult<CartReadDto>> RemoveItem(int productId, CancellationToken ct)
     {
+        var uidOrErr = _GetUserIdOr401();
+        if (uidOrErr.Result is not null) return uidOrErr.Result!;
+        var userId = uidOrErr.Value;
+
+        var cart = await _GetPendingCartWithItemsAsync(userId, ct, includeProduct: false);
+        if (cart is null) return NotFound("Giỏ hàng không tồn tại.");
+
         var item = await _db.CartItems
-            .FirstOrDefaultAsync(ci => ci.CartItemID == cartItemId && ci.CartID == cartId, ct);
-        if (item is null) return NotFound();
+            .FirstOrDefaultAsync(i => i.CartID == cart.CartID && i.ProductID == productId, ct);
+        if (item is null) return NotFound("Sản phẩm không có trong giỏ hàng.");
 
         _db.CartItems.Remove(item);
-        await _db.SaveChangesAsync(ct);
-        return NoContent();
-    }    
-        
-          // Xoá toàn bộ giỏ
-        // DELETE /api/cart/{cartId}
-        [HttpDelete("{cartId:int}")]
-        public async Task<IActionResult> ClearCart(int cartId, CancellationToken ct)
-        {
-            var items = await _db.CartItems.Where(ci => ci.CartID == cartId).ToListAsync(ct);
-            if (items.Count == 0) return NoContent();
+        await _db.Entry(cart).Collection(c => c.CartItems).LoadAsync(ct);
 
-            _db.CartItems.RemoveRange(items);
+        if (cart.CartItems.Count == 0)
+        {
+            _db.Carts.Remove(cart);
             await _db.SaveChangesAsync(ct);
-            return NoContent();
-        }   
+            return Ok(EmptyDto());
+        }
+
+        _RecalcTotal(cart);
+        await _db.SaveChangesAsync(ct);
+
+        // trả DTO để FE đồng bộ ngay
+        await _db.Entry(cart).Collection(c => c.CartItems).Query().Include(i => i.Product).LoadAsync(ct);
+        return Ok(_MapToDto(cart));
+    }
+
+    // DELETE /api/cart/clear
+    [HttpDelete("clear")]
+    public async Task<ActionResult<CartReadDto>> ClearCart(CancellationToken ct)
+    {
+        var uidOrErr = _GetUserIdOr401();
+        if (uidOrErr.Result is not null) return uidOrErr.Result!;
+        var userId = uidOrErr.Value;
+
+        var cart = await _GetPendingCartWithItemsAsync(userId, ct);
+        if (cart is null) return NotFound("Không có giỏ hàng nào để xoá.");
+
+        _db.Carts.Remove(cart);
+        await _db.SaveChangesAsync(ct);
+
+        return Ok(EmptyDto());
+    }
 }

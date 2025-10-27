@@ -5,6 +5,8 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using SalesApi.Data.Models;
+using Microsoft.Data.SqlClient;
+using System.Security.Claims;
 
 var builder = WebApplication.CreateBuilder(args);
 var cfg = builder.Configuration;
@@ -49,9 +51,30 @@ builder.Services.AddAuthentication(o =>
         ValidIssuer = JwtIssuer,
         ValidAudience = JwtAudience,
         IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(JwtKey)),
-        ClockSkew = TimeSpan.FromSeconds(30)
+        ClockSkew = TimeSpan.Zero,
+        NameClaimType = ClaimTypes.NameIdentifier
     };
-});
+    
+     o.Events = new JwtBearerEvents
+    {
+        OnAuthenticationFailed = ctx =>
+        {
+            Console.WriteLine("JWT FAILED: " + ctx.Exception.GetType().Name + " - " + ctx.Exception.Message);
+            return Task.CompletedTask;
+        },
+        OnChallenge = ctx =>
+        {
+            Console.WriteLine("JWT CHALLENGE: " + ctx.ErrorDescription);
+            return Task.CompletedTask;
+        },
+        OnTokenValidated = ctx =>
+        {
+            var nameid = ctx.Principal?.FindFirstValue(ClaimTypes.NameIdentifier);
+            Console.WriteLine($"JWT OK: nameid={nameid}");
+            return Task.CompletedTask;
+        }
+    };
+}); 
 
 builder.Services.AddAuthorization(opts =>
 {
@@ -96,6 +119,45 @@ builder.Services.AddSwaggerGen(c =>
 
 var app = builder.Build();
 
+if (app.Environment.IsDevelopment())
+{
+    using (var scope = app.Services.CreateScope())
+    {
+        try
+        {
+            var context = scope.ServiceProvider.GetRequiredService<SalesAppDbContext>();
+
+            Console.WriteLine("Attempting to connect...");
+            Console.WriteLine($"Connection String: {builder.Configuration.GetConnectionString("DefaultConnection")}");
+
+            // Thử open connection trực tiếp
+            var connection = context.Database.GetDbConnection();
+            await connection.OpenAsync();
+            Console.WriteLine("Database connection: SUCCESS ✓");
+            await connection.CloseAsync();
+        }
+        catch (SqlException sqlEx)
+        {
+            Console.WriteLine("=== SQL EXCEPTION ===");
+            Console.WriteLine($"Message: {sqlEx.Message}");
+            Console.WriteLine($"Error Number: {sqlEx.Number}");
+            Console.WriteLine($"State: {sqlEx.State}");
+            Console.WriteLine($"Class: {sqlEx.Class}");
+            Console.WriteLine($"Server: {sqlEx.Server}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("=== GENERAL EXCEPTION ===");
+            Console.WriteLine($"Type: {ex.GetType().Name}");
+            Console.WriteLine($"Message: {ex.Message}");
+            if (ex.InnerException != null)
+            {
+                Console.WriteLine($"Inner Exception: {ex.InnerException.Message}");
+            }
+        }
+    }
+}
+
 // ===== Swagger UI =====
 app.UseSwagger();
 app.UseSwaggerUI(o =>
@@ -103,7 +165,7 @@ app.UseSwaggerUI(o =>
     o.SwaggerEndpoint("/swagger/v1/swagger.json", "SalesApi v1");
 });
 
-app.UseHttpsRedirection();
+// app.UseHttpsRedirection();
 app.UseCors();
 
 app.UseAuthentication(); // ✅ CÓ Authentication

@@ -92,7 +92,7 @@ public class AuthController : ControllerBase
 
         if (!int.TryParse(uidStr, out var uid))
             return Unauthorized("Invalid token: user id claim is not an integer.");
-            
+
         var user = await _db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.UserID == uid);
         if (user is null) return NotFound();
 
@@ -106,4 +106,12 @@ public class AuthController : ControllerBase
             user.Role
         });
     }
+    
+    [Authorize]
+[HttpGet("whoami")]
+public IActionResult WhoAmI()
+{
+    var claims = User.Claims.Select(c => new { c.Type, c.Value });
+    return Ok(claims);
+}
 }

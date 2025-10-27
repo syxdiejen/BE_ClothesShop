@@ -82,6 +82,8 @@ public class ProductsController : ControllerBase
             );
         }
 
+        var rows = await q.OrderBy(x => x.P.ProductID).ToListAsync();
+
         var items = await q
             .OrderBy(x => x.P.ProductID)
             .Select(x => new ProductListItemDto
@@ -89,8 +91,11 @@ public class ProductsController : ControllerBase
                 ProductID = x.P.ProductID,
                 ProductName = x.P.ProductName,
                 BriefDescription = x.P.BriefDescription,
+                FullDescription = x.P.FullDescription,
+                TechnicalSpecifications = x.P.TechnicalSpecifications,
                 Price = x.P.Price,
                 ImageURL = x.P.ImageURL,           // vẫn trả về hình đại diện (hoặc chuỗi pack)
+                ImageURLs = ParseImageURLs(x.P.ImageURL),
                 CategoryID = x.P.CategoryID,
                 CategoryName = x.CategoryName
             })

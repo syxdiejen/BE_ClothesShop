@@ -30,6 +30,8 @@ namespace SalesApi.DTOs
         public int ProductID { get; set; }
         public required string ProductName { get; set; }
         public string? BriefDescription { get; set; }
+        public string? FullDescription { get; set; }
+        public string? TechnicalSpecifications { get; set; }
         public decimal Price { get; set; }
         public string? ImageURL { get; set; }
         public int? CategoryID { get; set; }

@@ -27,8 +27,6 @@ public sealed class JwtTokenService : IJwtTokenService
         var claims = new List<Claim>
         {
             new Claim("uid", userId.ToString()),
-            new Claim(JwtRegisteredClaimNames.Sub, username),
-            new Claim(ClaimTypes.NameIdentifier, userId.ToString()),
             new Claim(ClaimTypes.Name, username)
         };
         if (!string.IsNullOrWhiteSpace(email))
