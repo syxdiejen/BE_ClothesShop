@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
+using SalesApi.Config;
 using SalesApi.Data.Models;
 using Microsoft.Data.SqlClient;
 using System.Security.Claims;
@@ -18,6 +19,8 @@ var cfg = builder.Configuration;
 //     c.SwaggerDoc("v1", new OpenApiInfo { Title = "SalesApi", Version = "v1" });
 // });
 
+// ===== Configuration =====
+builder.Services.Configure<VnPayOptions>(builder.Configuration.GetSection("VnPay"));
 // ===== DbContext =====
 builder.Services.AddDbContext<SalesAppDbContext>(options =>
     options.UseSqlServer(cfg.GetConnectionString("DefaultConnection")));
